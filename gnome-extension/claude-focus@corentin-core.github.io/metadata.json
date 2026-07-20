@@ -1,0 +1,8 @@
+{
+  "uuid": "claude-focus@corentin-core.github.io",
+  "name": "Claude Focus",
+  "description": "Focus a window by title pattern, callable over DBus. Companion to the Claude sessions tray: lets a background app raise a specific VSCode window on Wayland, and binds a global shortcut that opens the tray's conversation palette.",
+  "shell-version": ["46"],
+  "settings-schema": "org.gnome.shell.extensions.claude-focus",
+  "version": 3
+}
