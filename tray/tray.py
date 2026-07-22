@@ -992,6 +992,147 @@ DBUS_IFACE_XML = """
 </node>
 """
 
+# --------------------------------------------------------------------------- #
+# Claude-warm theme: a self-contained palette applied on top of the user's
+# GTK theme, so the windows carry their own identity (cream/ink in light,
+# charcoal in dark) with the Claude clay accent — independent of Adwaita/Yaru.
+# --------------------------------------------------------------------------- #
+_LIGHT = {
+    "win": "#faf9f5", "surface": "#ffffff", "elevated": "#f4f2ea",
+    "ink": "#262624", "sub": "#6f6c65", "faint": "#8f8b81",
+    "border": "#e7e3d7", "border_strong": "#d7d1c1", "row_alt": "#f6f4ec",
+    "accent": "#c15f3c", "accent_bg": "#d97757", "accent_fg": "#ffffff",
+}
+_DARK = {
+    "win": "#262624", "surface": "#2f2e2b", "elevated": "#35342f",
+    "ink": "#f0eee6", "sub": "#b1ada3", "faint": "#8f8b81",
+    "border": "#3b3a36", "border_strong": "#4a4842", "row_alt": "#302f2c",
+    "accent": "#e79a80", "accent_bg": "#d97757", "accent_fg": "#ffffff",
+}
+
+_CSS_TEMPLATE = """
+window, .background {{ background-color: {win}; color: {ink}; }}
+
+headerbar, headerbar.titlebar, .titlebar,
+headerbar:backdrop, .titlebar:backdrop {{
+  background: {surface};
+  background-image: none;   /* drop the theme's titlebar gradient */
+  border-bottom: 1px solid {border};
+  padding: 4px 8px;
+  min-height: 42px;
+}}
+headerbar .title {{ font-weight: 700; color: {ink}; }}
+headerbar .subtitle {{ color: {sub}; }}
+
+.content {{ padding: 14px; }}
+
+entry {{
+  background-color: {surface};
+  color: {ink};
+  border: 1px solid {border_strong};
+  border-radius: 9px;
+  padding: 7px 10px;
+  caret-color: {accent_bg};
+}}
+entry image {{ color: {faint}; }}
+entry:focus {{ border-color: {accent_bg}; }}
+entry.search-entry {{ font-size: 1.1em; padding: 9px 12px; }}
+
+combobox button, combobox box, combobox {{
+  background-color: {surface};
+  color: {ink};
+  border-radius: 8px;
+}}
+combobox button {{ border: 1px solid {border}; padding: 4px 8px; }}
+
+treeview.view {{
+  background-color: {surface};
+  color: {ink};
+}}
+treeview.view:selected,
+treeview.view:selected:focus {{
+  background-color: {accent_bg};
+  color: {accent_fg};
+}}
+treeview header button {{
+  background-color: {elevated};
+  color: {sub};
+  border: none;
+  border-bottom: 1px solid {border};
+  padding: 6px 8px;
+  font-weight: 600;
+}}
+treeview header button:hover {{ background-color: {row_alt}; }}
+
+.dim-label {{ color: {sub}; }}
+.headline {{ color: {ink}; }}
+.section-title {{ color: {accent}; font-weight: 700; }}
+
+.card {{
+  background-color: {surface};
+  border: 1px solid {border};
+  border-radius: 10px;
+}}
+
+button {{ border-radius: 8px; padding: 6px 12px; }}
+button.pill {{
+  background-color: {elevated};
+  color: {ink};
+  border: 1px solid {border};
+}}
+button.pill:hover {{ background-color: {row_alt}; }}
+button.close-x {{
+  color: {faint};
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 1.05em;
+}}
+button.close-x:hover {{ color: #ffffff; background-color: {accent_bg}; }}
+
+list, listbox {{ background-color: {win}; }}
+row.session-row {{ border-bottom: 1px solid {border}; padding: 3px 4px; }}
+row.session-row:hover {{ background-color: {row_alt}; }}
+"""
+
+PALETTE = _LIGHT
+_CSS_INSTALLED = False
+
+
+def _detect_dark():
+    """Dark theme ⇒ light default text: read a label's text-color luminance."""
+    try:
+        c = Gtk.Label().get_style_context().get_color(Gtk.StateFlags.NORMAL)
+        return (0.299 * c.red + 0.587 * c.green + 0.114 * c.blue) > 0.5
+    except Exception:
+        return False
+
+
+def install_css():
+    """Loads the Claude-warm palette once, at application priority so it wins
+    over the system theme. Picks the light or dark variant from the active
+    theme. Idempotent."""
+    global _CSS_INSTALLED, PALETTE
+    if _CSS_INSTALLED:
+        return
+    PALETTE = _DARK if _detect_dark() else _LIGHT
+    provider = Gtk.CssProvider()
+    provider.load_from_data(_CSS_TEMPLATE.format(**PALETTE).encode("utf-8"))
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), provider,
+        Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    _CSS_INSTALLED = True
+
+
+def _header_bar(title, subtitle=""):
+    hb = Gtk.HeaderBar()
+    hb.set_show_close_button(True)
+    hb.set_title(title)
+    if subtitle:
+        hb.set_subtitle(subtitle)
+    return hb
+
 
 class SearchWindow(Gtk.Window):
     """Full-text search across the conversation history: the query matches
@@ -1011,15 +1152,19 @@ class SearchWindow(Gtk.Window):
 
     def __init__(self):
         super().__init__(title="Search a conversation")
+        install_css()
         self.set_default_size(920, 540)
         self.set_position(Gtk.WindowPosition.CENTER)
+        self.set_titlebar(_header_bar("Search a conversation",
+                                      "Full-text across your history"))
         self.connect("key-press-event", self._on_key)
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.set_border_width(8)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.get_style_context().add_class("content")
         self.add(box)
 
         self.entry = Gtk.SearchEntry()
+        self.entry.get_style_context().add_class("search-entry")
         self.entry.set_placeholder_text("Message content, title, folder, branch…")
         self.entry.connect("search-changed", self._on_search)
         self.entry.connect("activate", self._open_selected)
@@ -1041,6 +1186,7 @@ class SearchWindow(Gtk.Window):
         min_widths = {0: 280, 4: 200}  # conversation dominates, excerpt follows
         for i, header in enumerate(headers):
             renderer = Gtk.CellRendererText()
+            renderer.set_property("ypad", 5)
             col = Gtk.TreeViewColumn(header, renderer, text=i)
             col.set_resizable(True)
             if sort_cols[i] >= 0:
@@ -1174,13 +1320,16 @@ class SessionsWindow(Gtk.Window):
 
     def __init__(self):
         super().__init__(title="Live Claude sessions")
+        install_css()
         self.set_default_size(720, 460)
         self.set_position(Gtk.WindowPosition.CENTER)
+        self.set_titlebar(_header_bar("Live Claude sessions",
+                                      "Click a row to open · ✕ to close"))
         self.connect("key-press-event", self._on_key)
         self._rows = {}  # ListBoxRow -> session
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.set_border_width(8)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.get_style_context().add_class("content")
         self.add(box)
 
         self.count = Gtk.Label(xalign=0)
@@ -1195,17 +1344,22 @@ class SessionsWindow(Gtk.Window):
         scroller.add(self.listbox)
         box.pack_start(scroller, True, True, 0)
 
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        footer.set_halign(Gtk.Align.END)
         refresh = Gtk.Button(label="Refresh")
+        refresh.get_style_context().add_class("pill")
         refresh.connect("clicked", lambda _b: self._reload())
-        box.pack_start(refresh, False, False, 0)
+        footer.pack_start(refresh, False, False, 0)
+        box.pack_start(footer, False, False, 0)
 
         self._reload()
 
     def _reload(self):
+        sessions = snapshot()  # fetch before tearing down the list
         for row in list(self._rows):
             self.listbox.remove(row)
         self._rows.clear()
-        for s in snapshot():
+        for s in sessions:
             self._rows[self._make_row(s)] = s
         for row in self._rows:
             self.listbox.add(row)
@@ -1214,8 +1368,9 @@ class SessionsWindow(Gtk.Window):
 
     def _make_row(self, s):
         row = Gtk.ListBoxRow()
+        row.get_style_context().add_class("session-row")
         hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        hbox.set_border_width(4)
+        hbox.set_border_width(6)
         mark = self.MARKS.get(s["state"], "⚪")
         title = s["title"] or s["last_prompt"][:60] or s["name"]
         text = f"{mark}  {title}"
@@ -1233,7 +1388,7 @@ class SessionsWindow(Gtk.Window):
 
         close = Gtk.Button(label="✕")
         close.set_relief(Gtk.ReliefStyle.NONE)
-        close.get_style_context().add_class("destructive-action")
+        close.get_style_context().add_class("close-x")
         if s.get("pid"):
             close.set_tooltip_text("Close the session (SIGTERM)")
             close.connect("clicked", lambda _b, r=row: self._close_row(r))
@@ -1396,6 +1551,7 @@ class DBusService:
 
 class Tray:
     def __init__(self):
+        install_css()
         icon_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
         self.ind = AppIndicator.Indicator.new_with_path(
             "claude-sessions",
