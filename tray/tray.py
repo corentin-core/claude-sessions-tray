@@ -742,17 +742,26 @@ def history_sync():
             for path, mtime in on_disk.items():
                 if abs(known.get(path, -1) - mtime) < 1e-6:
                     continue
-                _forget_transcript(conn, path)
-                session_id = os.path.splitext(os.path.basename(path))[0]
-                title, branch, last_prompt, cwd, entrypoint = _meta_of(path)
+                # Parse before touching the DB: a live transcript mid-write may
+                # have a truncated line. Skip it (retried next sync) rather than
+                # abort the whole index and leave the old rows purged.
+                try:
+                    session_id = os.path.splitext(os.path.basename(path))[0]
+                    title, branch, last_prompt, cwd, entrypoint = _meta_of(path)
+                    usage_rows, turn_rows = _usage_of(path)
+                    headless = entrypoint in _HEADLESS_ENTRYPOINTS
+                    bodies = [] if headless else list(_message_bodies(path))
+                except Exception as exc:
+                    print(f"[tray] skip {path}: {exc!r}", file=sys.stderr)
+                    continue
                 folder = os.path.basename(cwd.rstrip("/"))
+                _forget_transcript(conn, path)
                 conn.execute(
                     "INSERT INTO meta VALUES (?,?,?,?,?,?,?,?,?)",
                     (path, mtime, session_id, cwd, folder, title, branch,
                      last_prompt, entrypoint),
                 )
                 reindexed += 1
-                usage_rows, turn_rows = _usage_of(path)
                 conn.executemany(
                     "INSERT INTO usage VALUES (?,?,?,?,?,?,?,?)",
                     [(path, day, model, *tok) for (day, model), tok in usage_rows.items()],
@@ -761,7 +770,7 @@ def history_sync():
                     "INSERT INTO usage_turns VALUES (?,?,?)",
                     [(path, day, n) for day, n in turn_rows.items()],
                 )
-                if entrypoint in _HEADLESS_ENTRYPOINTS:
+                if headless:
                     continue  # mtime tracking only, no searchable content
                 meta_body = " ".join((title, folder, branch, last_prompt))
                 conn.execute(
@@ -770,7 +779,7 @@ def history_sync():
                 )
                 conn.executemany(
                     "INSERT INTO msg(body, path, role) VALUES (?,?,?)",
-                    [(body, path, role) for role, body in _message_bodies(path)],
+                    [(body, path, role) for role, body in bodies],
                 )
             conn.commit()
             return reindexed
@@ -1428,83 +1437,116 @@ class InsightWindow(Gtk.Window):
     last 7 days. The real budget is the subscription quota, shown at the top
     (no $ cost: the subscription isn't billed per token)."""
 
+    _SECTIONS = (
+        ("By model", ("Model", "Total", "Input", "Cache read", "Cache write", "Output")),
+        ("By folder", ("Folder", "Tokens")),
+        ("Last 7 days", ("Day", "Tokens", "Turns")),
+    )
+
     def __init__(self, usage=None):
         super().__init__(title="Today's insight")
+        install_css()
         self.set_default_size(720, 620)
         self.set_position(Gtk.WindowPosition.CENTER)
+        self.set_titlebar(_header_bar("Today's insight", "Token usage"))
         self.connect("key-press-event", self._on_key)
         self._usage = usage or []
 
-        self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        self.box.set_border_width(8)
-        self.add(self.box)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.get_style_context().add_class("content")
+        self.add(box)
+
+        self.head = Gtk.Label(xalign=0)
+        self.head.get_style_context().add_class("headline")
+        box.pack_start(self.head, False, False, 0)
+        self.quota = Gtk.Label(xalign=0)
+        self.quota.get_style_context().add_class("dim-label")
+        self.quota.set_no_show_all(True)  # visibility driven by content, not show_all
+        box.pack_start(self.quota, False, False, 0)
+
+        self._stores = {}
+        for title, headers in self._SECTIONS:
+            box.pack_start(self._section(title, headers), False, False, 0)
+
+        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        footer.set_halign(Gtk.Align.END)
+        refresh = Gtk.Button(label="Refresh")
+        refresh.get_style_context().add_class("pill")
+        refresh.connect("clicked", lambda _b: self._reload())
+        footer.pack_start(refresh, False, False, 0)
+        box.pack_start(footer, False, False, 0)
+
         self._reload()
 
-    def _reload(self):
-        for child in self.box.get_children():
-            self.box.remove(child)
-        history_sync()  # incremental: near-instant once the index is warm
-        per_model, per_folder, turns, convs = usage_report()
+    def _section(self, title, headers):
+        """Section title + a card holding a TreeView. Its ListStore is kept in
+        `self._stores[title]` so refresh repopulates it in place — no widget is
+        recreated, which is what a mapped window needs to repaint reliably."""
+        wrapper = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        label = Gtk.Label(label=title, xalign=0)
+        label.get_style_context().add_class("section-title")
+        label.set_margin_top(10)
+        wrapper.pack_start(label, False, False, 0)
 
-        tokens = sum(sum(cols) for _m, *cols in per_model)
-        head = Gtk.Label(xalign=0)
-        head.set_markup(
-            f"<big><b>Today — {human_tokens(tokens)} tokens</b></big>   "
-            f"{turns} turns · {convs} conversations")
-        self.box.pack_start(head, False, False, 0)
-        quota = self._quota_line()
-        if quota:
-            sub = Gtk.Label(xalign=0)
-            sub.get_style_context().add_class("dim-label")
-            sub.set_text(quota)
-            self.box.pack_start(sub, False, False, 0)
-
-        model_rows = [
-            [model_label(m) or m, human_tokens(sum(cols)),
-             human_tokens(cols[0]), human_tokens(cols[1]),
-             human_tokens(cols[2] + cols[3]), human_tokens(cols[4])]
-            for m, *cols in sorted(per_model, key=lambda r: -sum(r[1:]))
-        ]
-        self._add_section("By model",
-                           ["Model", "Total", "Input", "Cache read", "Cache write", "Output"],
-                           model_rows)
-
-        folders = {}  # folder -> tokens
-        for folder, _model, *cols in per_folder:
-            folders[folder] = folders.get(folder, 0) + sum(cols)
-        folder_rows = [
-            [folder, human_tokens(toks)]
-            for folder, toks in sorted(folders.items(), key=lambda kv: -kv[1])
-        ]
-        self._add_section("By folder", ["Folder", "Tokens"], folder_rows)
-
-        day_rows = [[day, human_tokens(toks), f"{day_turns} turns"]
-                    for day, toks, day_turns in usage_daily_tokens()]
-        self._add_section("Last 7 days", ["Day", "Tokens", "Turns"], day_rows)
-
-        refresh = Gtk.Button(label="Refresh")
-        refresh.connect("clicked", lambda _b: self._reload())
-        self.box.pack_start(refresh, False, False, 0)
-        self.box.show_all()
-
-    def _add_section(self, title, headers, rows):
-        label = Gtk.Label(xalign=0)
-        label.set_markup(f"<b>{title}</b>")
-        label.set_margin_top(8)
-        self.box.pack_start(label, False, False, 0)
         store = Gtk.ListStore(*([str] * len(headers)))
-        for row in rows:
-            store.append(row)
         view = Gtk.TreeView(model=store)
         view.set_can_focus(False)
         for i, header in enumerate(headers):
             renderer = Gtk.CellRendererText()
+            renderer.set_property("ypad", 4)
             if i > 0:  # numeric columns right-aligned
                 renderer.set_property("xalign", 1.0)
             col = Gtk.TreeViewColumn(header, renderer, text=i)
             col.set_expand(i == 0)
             view.append_column(col)
-        self.box.pack_start(view, False, False, 0)
+        card = Gtk.Frame()
+        card.set_shadow_type(Gtk.ShadowType.NONE)
+        card.get_style_context().add_class("card")
+        card.add(view)
+        wrapper.pack_start(card, False, False, 0)
+        self._stores[title] = store
+        return wrapper
+
+    def _reload(self):
+        try:
+            history_sync()  # incremental: near-instant once the index is warm
+        except Exception as exc:
+            print(f"[tray] insight sync failed: {exc!r}", file=sys.stderr)
+        per_model, per_folder, turns, convs = usage_report()
+
+        tokens = sum(sum(cols) for _m, *cols in per_model)
+        self.head.set_markup(
+            f"<big><b>Today — {human_tokens(tokens)} tokens</b></big>   "
+            f"{turns} turns · {convs} conversations")
+        quota = self._quota_line()
+        self.quota.set_text(quota)
+        self.quota.set_visible(bool(quota))
+
+        self._fill("By model", [
+            [model_label(m) or m, human_tokens(sum(cols)),
+             human_tokens(cols[0]), human_tokens(cols[1]),
+             human_tokens(cols[2] + cols[3]), human_tokens(cols[4])]
+            for m, *cols in sorted(per_model, key=lambda r: -sum(r[1:]))
+        ])
+
+        folders = {}  # folder -> tokens
+        for folder, _model, *cols in per_folder:
+            folders[folder] = folders.get(folder, 0) + sum(cols)
+        self._fill("By folder", [
+            [folder, human_tokens(toks)]
+            for folder, toks in sorted(folders.items(), key=lambda kv: -kv[1])
+        ])
+
+        self._fill("Last 7 days", [
+            [day, human_tokens(toks), f"{day_turns} turns"]
+            for day, toks, day_turns in usage_daily_tokens()
+        ])
+
+    def _fill(self, title, rows):
+        store = self._stores[title]
+        store.clear()
+        for row in rows:
+            store.append(row)
 
     def _quota_line(self):
         """« Quota: session 16% (→13h19) · week 21% (→14h59) » (Fable hidden if 0%).
