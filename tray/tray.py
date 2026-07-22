@@ -1577,18 +1577,26 @@ class Tray:
     def _add_new_session_submenu(self):
         parent = Gtk.MenuItem(label="➕ New session")
         sub = Gtk.Menu()
-        projects = list_projects()
-        if not projects:
-            empty = Gtk.MenuItem(label="(no known project)")
-            empty.set_sensitive(False)
-            sub.append(empty)
-        else:
-            for cwd in projects:
-                it = Gtk.MenuItem(label=pretty_folder(cwd))
-                it.connect("activate", lambda _w, c=cwd: open_new_session(c))
-                sub.append(it)
+        browse = Gtk.MenuItem(label="📁 Other folder…")
+        browse.connect("activate", lambda _w: self._new_session_from_chooser())
+        sub.append(browse)
+        sub.append(Gtk.SeparatorMenuItem())
+        for cwd in list_projects():
+            it = Gtk.MenuItem(label=pretty_folder(cwd))
+            it.connect("activate", lambda _w, c=cwd: open_new_session(c))
+            sub.append(it)
         parent.set_submenu(sub)
         self.menu.append(parent)
+
+    def _new_session_from_chooser(self):
+        """Pick any folder (not just ones with past sessions) and start a session there."""
+        dialog = Gtk.FileChooserDialog(
+            title="New session in folder", action=Gtk.FileChooserAction.SELECT_FOLDER)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Open", Gtk.ResponseType.OK)
+        dialog.set_local_only(True)
+        if dialog.run() == Gtk.ResponseType.OK and dialog.get_filename():
+            open_new_session(dialog.get_filename())
+        dialog.destroy()
 
     @staticmethod
     def _display_title(s):
