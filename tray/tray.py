@@ -1659,6 +1659,18 @@ class Tray:
                 return u["pct"]
         return None
 
+    def _quota_summary(self):
+        """« Quota  session 37% (→18h22) · week 58% (→Thu 16h02) », Fable hidden at 0%."""
+        cells = []
+        for u in self._usage:
+            if u["short"] == "Fable" and u["pct"] == 0:
+                continue
+            cell = f"{u['short']} {u['pct']}%"
+            if u["reset_epoch"]:
+                cell += f" (→{reset_clock(u['reset_epoch'])})"
+            cells.append(cell)
+        return "Quota  " + "  ·  ".join(cells) if cells else ""
+
     def _refresh_icon(self):
         waiting = sum(1 for s in self._sessions if s["state"] == "waiting")
         stuck = sum(1 for s in self._sessions if s["state"] == "stuck")
@@ -1681,28 +1693,10 @@ class Tray:
         for child in self.menu.get_children():
             self.menu.remove(child)
 
-        if self._usage:
-            self._add_disabled("Subscription quota")
-            cells = []
-            for u in self._usage:
-                if u["short"] == "Fable" and u["pct"] == 0:
-                    continue
-                cell = f"{u['short']} {u['pct']}%"
-                if u["reset_epoch"]:
-                    cell += f" (→{reset_clock(u['reset_epoch'])})"
-                cells.append(cell)
-            self._add_disabled("   " + "  ·  ".join(cells))
-            self.menu.append(Gtk.SeparatorMenuItem())
-
+        # Clickable sessions lead: the menu's whole point is "who needs me → click".
         if not sessions:
             self._add_disabled("No Claude sessions")
         else:
-            summary = f"{len(waiting)} waiting"
-            if stuck:
-                summary += f" · {len(stuck)} stuck"
-            summary += f" · {len(sessions)} total"
-            self._add_disabled(summary)
-            self.menu.append(Gtk.SeparatorMenuItem())
             keys = [(self._display_title(s), os.path.basename(s["cwd"].rstrip("/")), s["branch"])
                     for s in sessions]
             collisions = {k for k, n in Counter(keys).items() if n > 1}
@@ -1726,6 +1720,18 @@ class Tray:
         self._add_action("🔍 Search a conversation…  (Super+K)", lambda _w: self.open_search())
         self._add_action("🧹 Live sessions…  (open / close)", lambda _w: self.open_sessions())
         self._add_action("📊 Today's insight…  (tokens)", lambda _w: self.open_insight())
+
+        # Footer: passive status below the clickable items, above Refresh/Quit.
+        self.menu.append(Gtk.SeparatorMenuItem())
+        if sessions:
+            counts = f"{len(waiting)} waiting"
+            if stuck:
+                counts += f" · {len(stuck)} stuck"
+            counts += f" · {len(sessions)} total"
+            self._add_disabled(counts)
+        quota = self._quota_summary()
+        if quota:
+            self._add_disabled(quota)
         self._add_action("Refresh", lambda _w: self.refresh())
         self._add_action("Quit", lambda _w: Gtk.main_quit())
         self.menu.show_all()
