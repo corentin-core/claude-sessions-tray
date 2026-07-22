@@ -35,9 +35,10 @@ TAIL_BYTES = 131072
 # but spawning it takes ~1.6 s => queried rarely, in a thread, off the GTK loop.
 USAGE_POLL_SECONDS = 180
 USAGE_CMD_TIMEOUT = 30
-# Delay between focus and deep link. Raise it if a click opens the wrong
-# window, lower it for more responsiveness.
-FOCUS_DELAY = 0
+# Settle time after `code <folder>` before the deep link fires. The deep link is
+# routed to VSCode's active window; the folder must have focused first, or the
+# session resumes in the wrong window as empty (mono-root). Starting value, tune.
+FOLDER_OPEN_DELAY = 1.0
 
 # Desktop notification when a session turns 🟠 ready. Set to False to turn it
 # off. A session whose window already has focus is not notified.
@@ -471,17 +472,21 @@ def _spawn(script):
 
 
 def open_session(session):
-    """Raises the right window (GNOME extension) then targets the session by
-    ID (deep link): together -> right window + right tab, even cross-window."""
+    """Opens the folder window first, then targets the session by ID (deep link).
+    Opening the folder makes it VSCode's active window, so the deep link resumes
+    there; without it the deep link lands in whatever window had focus and, if that
+    window is another folder, resumes as an empty session (mono-root)."""
     sid = session.get("session_id")
     cwd = session.get("cwd", "")
     code = shutil.which("code") or "/usr/bin/code"
     if TARGET_SESSION_BY_ID and sid:
         url = f"vscode://Anthropic.claude-code/open?session={sid}"
-        target = f"{shlex.quote(code)} --open-url {shlex.quote(url)}"
+        _spawn(
+            f"{shlex.quote(code)} {shlex.quote(cwd)}; sleep {FOLDER_OPEN_DELAY}; "
+            f"{_focus_snippet(cwd)}; {shlex.quote(code)} --open-url {shlex.quote(url)}"
+        )
     else:
-        target = f"{shlex.quote(code)} {shlex.quote(cwd)}"
-    _spawn(f"{_focus_snippet(cwd)}; sleep {FOCUS_DELAY}; {target}")
+        _spawn(f"{_focus_snippet(cwd)}; {shlex.quote(code)} {shlex.quote(cwd)}")
 
 
 def kill_session(pid):
@@ -534,7 +539,7 @@ def open_new_session(cwd):
     url = "vscode://Anthropic.claude-code/open"
     _spawn(
         f"{shlex.quote(code)} {shlex.quote(cwd)}; sleep 1.5; "
-        f"{_focus_snippet(cwd)}; sleep {FOCUS_DELAY}; {shlex.quote(code)} --open-url {shlex.quote(url)}"
+        f"{_focus_snippet(cwd)}; {shlex.quote(code)} --open-url {shlex.quote(url)}"
     )
 
 
@@ -545,7 +550,7 @@ def open_archived_session(cwd, session_id):
     url = f"vscode://Anthropic.claude-code/open?session={session_id}"
     _spawn(
         f"{shlex.quote(code)} {shlex.quote(cwd)}; sleep 1.5; "
-        f"{_focus_snippet(cwd)}; sleep {FOCUS_DELAY}; {shlex.quote(code)} --open-url {shlex.quote(url)}"
+        f"{_focus_snippet(cwd)}; {shlex.quote(code)} --open-url {shlex.quote(url)}"
     )
 
 
