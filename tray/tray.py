@@ -335,8 +335,10 @@ def _demo_sessions():
         ("idle", 3900, "Tune LR schedule", False, "claude-fable-5",
          "ml-pipeline", "experiment/lr-schedule", "Swept cosine vs step decay"),
     ]
+    # Out-of-range pid (> Linux pid_max): the ✕ renders active like the real
+    # tray, and kill_session no-ops safely (no such process) if ever clicked.
     return [{
-        "name": f"{folder}-demo{i}", "session_id": f"demo-{i}", "pid": None,
+        "name": f"{folder}-demo{i}", "session_id": f"demo-{i}", "pid": 2_000_000_000 + i,
         "cwd": os.path.join(HOME, "projects", folder), "branch": branch,
         "snippet": snippet, "last_prompt": "",
         "state": state, "idle_seconds": idle, "title": title, "last_error": err,
@@ -1047,12 +1049,18 @@ entry image {{ color: {faint}; }}
 entry:focus {{ border-color: {accent_bg}; }}
 entry.search-entry {{ font-size: 1.1em; padding: 9px 12px; }}
 
-combobox button, combobox box, combobox {{
-  background-color: {surface};
+combobox {{ background-color: transparent; }}
+combobox button {{
+  background-image: none;
+  background-color: {elevated};
   color: {ink};
+  border: 1px solid {border_strong};
+  box-shadow: none;
   border-radius: 8px;
+  padding: 4px 8px;
 }}
-combobox button {{ border: 1px solid {border}; padding: 4px 8px; }}
+combobox button:hover {{ background-color: {row_alt}; }}
+combobox arrow {{ color: {sub}; }}
 
 treeview.view {{
   background-color: {surface};
@@ -1064,10 +1072,12 @@ treeview.view:selected:focus {{
   color: {accent_fg};
 }}
 treeview header button {{
+  background-image: none;
   background-color: {elevated};
   color: {sub};
   border: none;
   border-bottom: 1px solid {border};
+  box-shadow: none;
   padding: 6px 8px;
   font-weight: 600;
 }}
@@ -1083,11 +1093,14 @@ treeview header button:hover {{ background-color: {row_alt}; }}
   border-radius: 10px;
 }}
 
-button {{ border-radius: 8px; padding: 6px 12px; }}
 button.pill {{
+  background-image: none;   /* drop the theme's button gradient (renders white) */
   background-color: {elevated};
   color: {ink};
-  border: 1px solid {border};
+  border: 1px solid {border_strong};
+  box-shadow: none;
+  border-radius: 8px;
+  padding: 6px 14px;
 }}
 button.pill:hover {{ background-color: {row_alt}; }}
 button.close-x {{
@@ -1103,6 +1116,24 @@ button.close-x:hover {{ color: #ffffff; background-color: {accent_bg}; }}
 list, listbox {{ background-color: {win}; }}
 row.session-row {{ border-bottom: 1px solid {border}; padding: 3px 4px; }}
 row.session-row:hover {{ background-color: {row_alt}; }}
+
+/* Scrollbar: dark slider, no ballooned white steppers. */
+scrollbar {{ background-color: transparent; border: none; }}
+scrollbar slider {{
+  background-color: {border_strong};
+  border-radius: 999px;
+  min-width: 8px;
+  min-height: 8px;
+}}
+scrollbar slider:hover {{ background-color: {sub}; }}
+scrollbar button {{
+  background: transparent;
+  color: {sub};
+  border: none;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+}}
 """
 
 PALETTE = _LIGHT
