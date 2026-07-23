@@ -1631,13 +1631,18 @@ class Tray:
         )
 
     def _tick(self):
-        self._sessions = snapshot()
-        self._notify_transitions()
-        self._refresh_icon()
-        sig = self._signature()
-        if sig != self._last_sig:  # rebuild only on a real change
-            self._last_sig = sig
-            self._refresh_menu()
+        # A GLib timeout callback that raises is removed for good, freezing the
+        # tray. Swallow so a transient failure (OOM spawning `claude`) self-heals.
+        try:
+            self._sessions = snapshot()
+            self._notify_transitions()
+            self._refresh_icon()
+            sig = self._signature()
+            if sig != self._last_sig:  # rebuild only on a real change
+                self._last_sig = sig
+                self._refresh_menu()
+        except Exception as exc:
+            print(f"[tray] tick failed: {exc!r}", file=sys.stderr)
         return True
 
     def refresh(self):
